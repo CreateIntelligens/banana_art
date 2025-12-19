@@ -147,24 +147,27 @@ def generate_image_task(generation_id: int, prompt: str, image_paths: List[str],
             gen_record.output_image_path = "error"
             db.commit()
 
+def save_uploaded_file(file: UploadFile, db: Session) -> models.UploadedImage:
+    """Helper to save uploaded file to disk and DB."""
+    file_ext = os.path.splitext(file.filename)[1]
+    new_filename = f"{uuid.uuid4()}{file_ext}"
+    file_path = os.path.join(UPLOAD_DIR, new_filename)
+    
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+        
+    db_image = models.UploadedImage(filename=file.filename, filepath=f"/static/uploads/{new_filename}")
+    db.add(db_image)
+    db.commit()
+    db.refresh(db_image)
+    return db_image
 
 @app.post("/api/upload", response_model=schemas.UploadedImage)
 async def upload_image(file: UploadFile = File(...), db: Session = Depends(database.get_db)):
     logger.info(f"Receiving upload: {file.filename}")
     try:
-        file_ext = os.path.splitext(file.filename)[1]
-        new_filename = f"{uuid.uuid4()}{file_ext}"
-        file_path = os.path.join(UPLOAD_DIR, new_filename)
-        
-        with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        db_image = models.UploadedImage(filename=file.filename, filepath=f"/static/uploads/{new_filename}")
-        db.add(db_image)
-        db.commit()
-        db.refresh(db_image)
-        
-        logger.info(f"Image saved to {file_path}, ID: {db_image.id}")
+        db_image = save_uploaded_file(file, db)
+        logger.info(f"Image saved to DB ID: {db_image.id}")
         return db_image
     except Exception as e:
         logger.error(f"Upload failed: {e}")
@@ -242,6 +245,50 @@ async def generate_content(
     # 3. Start Background Task
     background_tasks.add_task(generate_image_task, db_gen.id, prompt, local_image_paths, aspect_ratio, db)
     
+    return db_gen
+
+@app.post("/api/generate-direct", response_model=schemas.Generation)
+async def generate_content_direct(
+    prompt: str = Form(...), 
+    files: List[UploadFile] = File(...),
+    aspect_ratio: str = Form("1:1"),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(database.get_db)
+):
+    """
+    Direct generation endpoint that accepts image files instead of IDs.
+    Useful for external integrations (e.g., Postman, Scripts).
+    
+    - **prompt**: Text description.
+    - **files**: List of image files to upload and use.
+    - **aspect_ratio**: Output aspect ratio.
+    """
+    logger.info(f"Direct generation request: Prompt='{prompt}', Files={len(files)}, AR={aspect_ratio}")
+    
+    uploaded_images = []
+    local_image_paths = []
+    
+    # Process file uploads
+    for file in files:
+        try:
+            new_img = save_uploaded_file(file, db)
+            uploaded_images.append(new_img)
+            local_image_paths.append(os.path.join("backend", new_img.filepath.lstrip("/")))
+        except Exception as e:
+            logger.error(f"Failed to process uploaded file in direct generate: {e}")
+            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
+    # Create Generation Record
+    db_gen = models.Generation(prompt=prompt, aspect_ratio=aspect_ratio)
+    if uploaded_images:
+        db_gen.source_image_id = uploaded_images[0].id
+    db_gen.source_images = uploaded_images
+    
+    db.add(db_gen)
+    db.commit()
+    db.refresh(db_gen)
+    
+    background_tasks.add_task(generate_image_task, db_gen.id, prompt, local_image_paths, aspect_ratio, db)
     return db_gen
 
 # Template APIs
@@ -356,6 +403,71 @@ async def generate_from_template(
     db.refresh(db_gen)
 
     # 4. Start Background Task
+    background_tasks.add_task(
+        generate_image_task,
+        db_gen.id,
+        template.prompt_template,
+        local_image_paths,
+        template.aspect_ratio,
+        db
+    )
+    
+    return db_gen
+
+@app.post("/api/generations/from-template-direct", response_model=schemas.Generation)
+async def generate_from_template_direct(
+    template_id: int = Form(...),
+    files: List[UploadFile] = File(...), # User's content images (Direct Upload)
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(database.get_db)
+):
+    """
+    Direct template generation endpoint that accepts image files.
+    
+    - **template_id**: ID of the template.
+    - **files**: List of image files to upload and use as User Images.
+    
+    **Order**: User Files -> Template Images.
+    """
+    logger.info(f"Direct template generation: TemplateID={template_id}, Files={len(files)}")
+
+    # 1. Fetch Template
+    template = db.query(models.Template).filter(models.Template.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    all_source_images = []
+    local_image_paths = []
+    
+    # 2. Process User Files
+    for file in files:
+        try:
+            new_img = save_uploaded_file(file, db)
+            all_source_images.append(new_img)
+            local_image_paths.append(os.path.join("backend", new_img.filepath.lstrip("/")))
+        except Exception as e:
+            logger.error(f"Failed to process uploaded file in direct template gen: {e}")
+            raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
+
+    # 3. Add Template Images
+    for tmpl_img in template.reference_images:
+        # Note: We don't check for duplicates here as freshly uploaded files definitely have different IDs
+        all_source_images.append(tmpl_img)
+        local_image_paths.append(os.path.join("backend", tmpl_img.filepath.lstrip("/")))
+
+    # 4. Create Generation Record
+    db_gen = models.Generation(
+        prompt=template.prompt_template,
+        aspect_ratio=template.aspect_ratio,
+        source_images=all_source_images
+    )
+    if all_source_images:
+        db_gen.source_image_id = all_source_images[0].id
+        
+    db.add(db_gen)
+    db.commit()
+    db.refresh(db_gen)
+
     background_tasks.add_task(
         generate_image_task,
         db_gen.id,

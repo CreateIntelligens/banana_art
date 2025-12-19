@@ -98,6 +98,31 @@
 - **結果顯示**: 右側為生成結果 (OUT)。
 - 點擊圖片可放大檢視並下載。
 
+- `GET /api/images`: 取得已上傳的原始圖片列表。
+
+### 直接生成 API (Direct Generation APIs)
+適合外部整合或腳本使用，無需先呼叫 `/upload`。
+
+**1. 直接生成 (Direct Generate)**
+```bash
+curl -X POST "http://localhost:7588/api/generate-direct" \
+  -H "accept: application/json" \
+  -H "Content-Type: multipart/form-data" \
+  -F "prompt=A futuristic city with flying cars" \
+  -F "aspect_ratio=16:9" \
+  -F "files=@/path/to/image1.jpg" \
+  -F "files=@/path/to/image2.png"
+```
+
+**2. 直接套用模板 (Direct Template)**
+```bash
+curl -X POST "http://localhost:7588/api/generations/from-template-direct" \
+  -H "accept: application/json" \
+  -H "Content-Type: multipart/form-data" \
+  -F "template_id=1" \
+  -F "files=@/path/to/user_photo.jpg"
+```
+
 ## 專案構造
 
 ```
