@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: banana-art-backend
+    ports:
+      - "7588:7588"
+    volumes:
+      - ./backend:/app/backend
+      - ./.env:/app/.env
+    working_dir: /app
+    environment:
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 7588 --reload
+
+  frontend:
+    image: node:20-alpine
+    container_name: banana-art-frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app/frontend
+    working_dir: /app/frontend
+    command: sh -c "npm install && npm run dev -- --host"
+    depends_on:
+      - backend

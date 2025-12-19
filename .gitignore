@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+.env
+
+# Backend
+backend/banana_art.db
+backend/logs/
+backend/static/uploads/*
+backend/static/generated/*
+!backend/static/uploads/.gitkeep
+!backend/static/generated/.gitkeep
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
