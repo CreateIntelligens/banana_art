@@ -63,8 +63,8 @@ if API_KEY:
 else:
     logger.warning("GEMINI_API_KEY not set in .env")
 
-def generate_image_task(generation_id: int, prompt: str, image_path: Optional[str], aspect_ratio: str, db: Session):
-    logger.info(f"Starting generation for ID {generation_id} with model {MODEL_NAME} (AR: {aspect_ratio})")
+def generate_image_task(generation_id: int, prompt: str, image_paths: List[str], aspect_ratio: str, db: Session):
+    logger.info(f"Starting generation for ID {generation_id} with model {MODEL_NAME} (AR: {aspect_ratio}, Images: {len(image_paths)})")
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         
@@ -72,9 +72,14 @@ def generate_image_task(generation_id: int, prompt: str, image_path: Optional[st
         enhanced_prompt = f"{prompt}, aspect ratio {aspect_ratio}"
         content = [enhanced_prompt]
 
-        if image_path:
-             sample_file = genai.upload_file(image_path, mime_type="image/jpeg")
-             content.append(sample_file)
+        for path in image_paths:
+             try:
+                 # Ensure we have absolute path or correct relative path
+                 # The path comes from DB as "backend/static/..." (relative to root) or absolute
+                 sample_file = genai.upload_file(path, mime_type="image/jpeg")
+                 content.append(sample_file)
+             except Exception as file_err:
+                 logger.error(f"Failed to upload file to Gemini {path}: {file_err}")
         
         response = model.generate_content(content)
         
@@ -170,35 +175,199 @@ def get_images(skip: int = 0, limit: int = 100, db: Session = Depends(database.g
     images = db.query(models.UploadedImage).order_by(models.UploadedImage.upload_time.desc()).offset(skip).limit(limit).all()
     return images
 
+@app.delete("/api/images/{image_id}")
+def delete_image(image_id: int, db: Session = Depends(database.get_db)):
+    image = db.query(models.UploadedImage).filter(models.UploadedImage.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    # Remove from filesystem
+    local_path = os.path.join("backend", image.filepath.lstrip("/"))
+    if os.path.exists(local_path):
+        try:
+            os.remove(local_path)
+        except Exception as e:
+            logger.error(f"Failed to remove file {local_path}: {e}")
+
+    db.delete(image)
+    db.commit()
+    return {"status": "deleted"}
+
 @app.post("/api/generate", response_model=schemas.Generation)
 async def generate_content(
     prompt: str = Form(...), 
-    image_id: Optional[int] = Form(None), 
+    image_ids: List[int] = Form([]),
     aspect_ratio: str = Form("1:1"),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(database.get_db)
 ):
-    logger.info(f"Generation request: Prompt='{prompt}', ImageID={image_id}, AR={aspect_ratio}")
+    """
+    Generate content using Gemini model.
     
-    local_image_path = None
+    - **prompt**: Text description of the desired image.
+    - **image_ids**: List of uploaded image IDs to be used as context. 
+      **Ordering**: Images are sent to the model in the exact order they are provided in this list (1st, 2nd, etc.).
+    - **aspect_ratio**: Desired aspect ratio for the output (e.g., "1:1", "16:9").
+    """
+    logger.info(f"Generation request: Prompt='{prompt}', ImageIDs={image_ids}, AR={aspect_ratio}")
     
-    if image_id:
-        # Verify image exists
-        image = db.query(models.UploadedImage).filter(models.UploadedImage.id == image_id).first()
-        if not image:
-            raise HTTPException(status_code=404, detail="Image not found")
-        local_image_path = os.path.join("backend", image.filepath.lstrip("/"))
+    local_image_paths = []
+    
+    # 1. Fetch images from DB
+    uploaded_images = []
+    if image_ids:
+        raw_images = db.query(models.UploadedImage).filter(models.UploadedImage.id.in_(image_ids)).all()
+        img_map = {img.id: img for img in raw_images}
         
-    # Create Generation Record (Pending)
-    db_gen = models.Generation(prompt=prompt, source_image_id=image_id, aspect_ratio=aspect_ratio)
+        # Sort uploaded_images list by input order for DB relationship
+        for mid in image_ids:
+            if mid in img_map:
+                uploaded_images.append(img_map[mid])
+                local_image_paths.append(os.path.join("backend", img_map[mid].filepath.lstrip("/")))
+            
+    # 2. Create Generation Record
+    db_gen = models.Generation(prompt=prompt, aspect_ratio=aspect_ratio)
+    
+    # Set Primary Source Image (for backward compat)
+    if uploaded_images:
+        db_gen.source_image_id = uploaded_images[0].id
+        
+    # Set Many-to-Many Relationship
+    db_gen.source_images = uploaded_images
+    
     db.add(db_gen)
     db.commit()
     db.refresh(db_gen)
     
-    # Start Background Task
-    background_tasks.add_task(generate_image_task, db_gen.id, prompt, local_image_path, aspect_ratio, db)
+    # 3. Start Background Task
+    background_tasks.add_task(generate_image_task, db_gen.id, prompt, local_image_paths, aspect_ratio, db)
     
     return db_gen
+
+# Template APIs
+@app.post("/api/templates", response_model=schemas.Template)
+def create_template(
+    template: schemas.TemplateCreate,
+    db: Session = Depends(database.get_db)
+):
+    db_template = models.Template(name=template.name, prompt_template=template.prompt_template, aspect_ratio=template.aspect_ratio)
+    
+    if template.reference_image_ids:
+        imgs = db.query(models.UploadedImage).filter(models.UploadedImage.id.in_(template.reference_image_ids)).all()
+        db_template.reference_images = imgs
+        
+    db.add(db_template)
+    db.commit()
+    db.refresh(db_template)
+    return db_template
+
+@app.put("/api/templates/{tmpl_id}", response_model=schemas.Template)
+def update_template(
+    tmpl_id: int,
+    template: schemas.TemplateCreate,
+    db: Session = Depends(database.get_db)
+):
+    db_template = db.query(models.Template).filter(models.Template.id == tmpl_id).first()
+    if not db_template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    db_template.name = template.name
+    db_template.prompt_template = template.prompt_template
+    db_template.aspect_ratio = template.aspect_ratio
+    
+    if template.reference_image_ids is not None:
+        imgs = db.query(models.UploadedImage).filter(models.UploadedImage.id.in_(template.reference_image_ids)).all()
+        db_template.reference_images = imgs
+        
+    db.commit()
+    db.refresh(db_template)
+    return db_template
+
+@app.get("/api/templates", response_model=List[schemas.Template])
+def get_templates(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+    return db.query(models.Template).offset(skip).limit(limit).all()
+
+@app.delete("/api/templates/{tmpl_id}")
+def delete_template(tmpl_id: int, db: Session = Depends(database.get_db)):
+    tmpl = db.query(models.Template).filter(models.Template.id == tmpl_id).first()
+    if not tmpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    db.delete(tmpl)
+    db.commit()
+    return {"status": "deleted"}
+
+@app.post("/api/generations/from-template", response_model=schemas.Generation)
+async def generate_from_template(
+    template_id: int = Form(...),
+    image_ids: List[int] = Form([]), # User's content images
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(database.get_db)
+):
+    """
+    Generate content by applying a saved template to user-selected images.
+
+    - **template_id**: ID of the template to apply.
+    - **image_ids**: List of user-selected image IDs.
+    
+    **Image Ordering Logic**:
+    The model receives images in the following order:
+    1. **User Images**: The images selected by the user (in the order provided in `image_ids`).
+    2. **Template Images**: The reference images associated with the template.
+    
+    Example: User selects [ImgA, ImgB] and Template has [ImgT]. Model input order: [ImgA, ImgB, ImgT].
+    """
+    logger.info(f"Template generation: TemplateID={template_id}, UserImageIDs={image_ids}")
+
+    # 1. Fetch Template
+    template = db.query(models.Template).filter(models.Template.id == template_id).first()
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    # 2. Prepare all image sources
+    all_source_images = []
+    local_image_paths = []
+    
+    # Add user images first
+    if image_ids:
+        user_images = db.query(models.UploadedImage).filter(models.UploadedImage.id.in_(image_ids)).all()
+        img_map = {img.id: img for img in user_images}
+        for mid in image_ids:
+            if mid in img_map:
+                all_source_images.append(img_map[mid])
+                local_image_paths.append(os.path.join("backend", img_map[mid].filepath.lstrip("/")))
+    
+    # Add template reference images
+    for tmpl_img in template.reference_images:
+        if tmpl_img not in all_source_images: # Avoid duplicates
+            all_source_images.append(tmpl_img)
+            local_image_paths.append(os.path.join("backend", tmpl_img.filepath.lstrip("/")))
+
+    # 3. Create Generation Record
+    db_gen = models.Generation(
+        prompt=template.prompt_template, # Use template's prompt directly
+        aspect_ratio=template.aspect_ratio,
+        source_images=all_source_images
+    )
+    if all_source_images:
+        db_gen.source_image_id = all_source_images[0].id
+        
+    db.add(db_gen)
+    db.commit()
+    db.refresh(db_gen)
+
+    # 4. Start Background Task
+    background_tasks.add_task(
+        generate_image_task,
+        db_gen.id,
+        template.prompt_template,
+        local_image_paths,
+        template.aspect_ratio,
+        db
+    )
+    
+    return db_gen
+
+# ... other endpoints ...
 
 @app.get("/api/history", response_model=List[schemas.Generation])
 def get_history(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
@@ -218,13 +387,7 @@ def delete_generation(gen_id: int, db: Session = Depends(database.get_db)):
     if not gen:
         raise HTTPException(status_code=404, detail="Generation not found")
     
-    # Optional: Delete the actual file if you want to save space
-    # For now we only delete the DB record as requested, keeping "original" (source) images safe.
-    # If "original picture retained" means the SOURCE image, we are safe.
-    # If we want to delete the GENERATED file:
     if gen.output_image_path and gen.output_image_path != "error" and not gen.output_image_path.endswith(".txt"):
-         # Construct local path from url
-         # /static/generated/filename -> backend/static/generated/filename
          local_path = os.path.join("backend", gen.output_image_path.lstrip("/"))
          if os.path.exists(local_path):
              try:

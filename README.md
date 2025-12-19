@@ -1,20 +1,25 @@
 # Banana Art 🍌
 
 這是一個使用 Google Gemini API (Flash/Pro/Vision) 打造的全端 AI 圖片生成應用程式。
-具備簡潔的 React 前端介面，支援圖片管理、上傳以及長寬比調整等功能。
+具備簡潔的 React 前端介面，支援圖片管理、上傳、模板應用以及長寬比調整等功能。
 
 ## 功能特色
 
 - **多模態生成 (Multi-Modal Generation)**:
   - **文生圖 (Text-to-Image)**: 輸入純文字提示詞即可生成圖片。
   - **圖生圖 (Image-to-Image)**: 上傳參考圖片並搭配提示詞進行修改或風格轉換。
+  - **多圖輸入**: 支援選擇多張圖片作為輸入，Gemini 模型將會同時參考這些圖片。
+- **模板系統 (Template System)**:
+  - 能夠將常用的 Prompt 和參考圖片儲存為模板。
+  - 支援「套用模板」功能，將您的圖片與模板的風格圖片結合。
 - **進階控制**: 支援多種長寬比設定 (1:1, 16:9, 9:16 等)。
 - **畫廊系統 (Gallery System)**:
   - 瀏覽所有生成歷史紀錄。
-  - 並排對照檢視 (Before/After): 同時顯示輸入原圖與生成結果。
+  - 並排對照檢視: 顯示輸入原圖 (IN 1, IN 2...) 與生成結果 (OUT)。
   - 全螢幕燈箱 (Lightbox): 支援大圖檢視、查看解析度資訊及下載圖片。
-  - 管理功能: 可刪除不滿意的生成結果（保留原始上傳圖片）。
-- **即時反饋**: 顯示生成進度與詳細的前端操作日誌 (Logs)。
+- **管理功能**:
+  - 可刪除不滿意的生成結果。
+  - 可刪除上傳的原始圖片（點擊圖片右下角的垃圾桶）。
 
 ## 技術堆疊 (Tech Stack)
 
@@ -43,7 +48,7 @@
    編輯 `.env` 並填入您的 API Key:
    ```ini
    GEMINI_API_KEY=您的_API_KEY
-   GEMINI_MODEL_NAME=gemini-3-pro-preview  # 或 gemini-2.0-flash
+   GEMINI_MODEL_NAME=gemini-2.0-flash-exp  # 建議使用最新版模型
    ```
 
 3. **啟動應用程式**
@@ -53,58 +58,56 @@
    ```
 
 4. **開始使用**
-   - **前端頁面**: [http://localhost:5173](http://localhost:5173)
-   - **後端 API 文件**: [http://localhost:8000/docs](http://localhost:8000/docs)
+   - **前端頁面**: [http://localhost:5173](http://localhost:5173) (若使用 Docker 預設 port)
+   - **後端 API 文件**: [http://localhost:7588/docs](http://localhost:7588/docs)
 
 ## 使用指南
 
-### 前端介面 (Frontend)
-1. **創作頁籤 (Create Tab)**:
-   - **選擇輸入圖片 (可選)**:
-     - 點擊 "Upload New" 方塊上傳本地圖片。
-     - 從右側的網格中選擇先前上傳過的圖片。
-     - 點擊圖片右上角的放大鏡圖示可檢視原圖細節。
-   - **輸入提示詞 (Prompt)**: 描述您想要生成的內容。
-   - **長寬比 (Aspect Ratio)**: 從下拉選單選擇圖片比例 (如 Square, Landscape, Portrait)。
-   - 點擊 **Generate** 按鈕。生成結果完成後會自動顯示在下方。
+### 1. 創作 (Create)
+自由創作模式，適合從頭開始生成。
 
-2. **畫廊頁籤 (Gallery Tab)**:
-   - 瀏覽所有過去的創作。
-   - 若該次生成有參考原圖，卡片會以分割畫面顯示 (左:原圖 / 右:成品)。
-   - 點擊卡片開啟 **全螢幕檢視模式**:
-     - 檢視高解析度大圖。
-     - 查看圖片實際解析度 (例如 1024x1024 px)。
-     - 下載生成結果。
-   - 使用垃圾桶圖示刪除紀錄 (此操作僅刪除生成結果，不會刪除原始上傳的圖片)。
+- **輸入圖片**:
+  - 點擊圖片即可選取，再次點擊取消。
+  - **順序很重要**: 圖片上會顯示 **1, 2, 3...** 的數字，這代表傳送給 AI 模型的順序。
+  - 提示詞範例: "Make image 1 and image 2 playing cards..."。
+- **管理圖片**:
+  - 點擊圖片**右上角**放大鏡：檢視大圖。
+  - 點擊圖片**右下角**垃圾桶：永久刪除該圖片。
 
-### 後端 API (Backend)
-後端基於 FastAPI 建構，提供以下主要 Endpoints:
+### 2. 套用模板 (Apply Template)
+將您的圖片融合到既有的風格模板中。
 
-- `POST /api/upload`: 上傳原始圖片。
-- `POST /api/generate`: 觸發生成任務 (支援可選的 `image_id` 與 `aspect_ratio`)。
-- `GET /api/history`: 取得生成歷史列表。
-- `GET /api/generations/{id}`: 取得單筆生成任務詳情 (用於輪詢狀態)。
-- `DELETE /api/generations/{id}`: 刪除生成紀錄。
-- `GET /api/images`: 取得已上傳的原始圖片列表。
+- **操作流程**:
+  1. 先選擇一個模板 (Template)。
+  2. 再選擇您要上傳或使用的圖片 (User Images)。
+- **API 圖片處理順序**:
+  當您點擊生成時，系統會依照以下順序將圖片傳送給模型：
+  1. **使用者圖片 (User Images)**: 依照您選取的順序 (1, 2...)。
+  2. **模板圖片 (Template Images)**: 模板原本設定的參考圖。
+  
+  *範例*: 如果您選了兩張圖 (A, B) 並套用了一個有一個參考圖 (T) 的模板，模型看到的順序是: `[A, B, T]`。
 
-## 專案結構
+### 3. 模板管理 (Templates)
+- 建立您自己的風格模板。
+- 設定預設的 Prompt（支援 `{{prompt}}` 語法佔位，雖然目前簡易版尚未完全實作變數替換，但可作為紀錄）。
+- 綁定參考圖片與長寬比。
+
+### 4. 畫廊 (Gallery)
+- 檢視所有歷史紀錄。
+- **輸入顯示**: 左側會列出該次生成所使用的所有輸入圖片 (IN 1, IN 2...)，順序與生成時一致。
+- **結果顯示**: 右側為生成結果 (OUT)。
+- 點擊圖片可放大檢視並下載。
+
+## 專案構造
 
 ```
 banana-art/
 ├── backend/            # FastAPI 後端應用
-│   ├── static/         # 靜態檔案儲存 (上傳圖檔 & 生成圖檔)
-│   ├── logs/           # 應用程式日誌
-│   ├── main.py         # 程式入口與核心邏輯
-│   └── models.py       # 資料庫模型定義
+│   ├── static/         # 靜態檔案 (uploads/ & generated/)
+│   ├── main.py         # 核心邏輯 API
+│   └── models.py       # DB Schema
 ├── frontend/           # React 前端應用
-│   ├── src/            # 元件與邏輯程式碼
-│   └── vite.config.ts  # Vite 設定檔
-└── docker-compose.yaml # Docker 編排設定
+│   ├── src/            # App.tsx, api.ts
+│   └── vite.config.ts  # Vite Config
+└── docker-compose.yaml # 服務編排
 ```
-
-## 疑難排解 (Troubleshooting)
-
-- **500 Internal Server Error (Database)**:
-  如果您修改了資料庫模型 (Schema)，請嘗試刪除 `backend/banana_art.db` 檔案並重啟容器，讓系統重新建立資料庫結構。
-- **Quota Exceeded (配額不足)**:
-  Gemini 免費層級有速率限制。如果您在日誌中看到 Quota 相關錯誤，請嘗試在 `.env` 中將 `GEMINI_MODEL_NAME` 切換為 `gemini-1.5-flash` 以獲得較高的請求額度。

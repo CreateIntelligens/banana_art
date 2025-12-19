@@ -17,7 +17,17 @@ export interface Generation {
   source_image_id: number | null;
   output_image_path: string | null;
   created_at: string;
-  source_image?: UploadedImage | null;
+  source_images: UploadedImage[];
+  aspect_ratio?: string;
+}
+
+export interface Template {
+  id: number;
+  name: string;
+  prompt_template: string;
+  created_at: string;
+  reference_images: UploadedImage[];
+  aspect_ratio: string;
 }
 
 export const uploadImage = async (file: File) => {
@@ -32,15 +42,26 @@ export const getImages = async () => {
   return response.data;
 };
 
-export const generateContent = async (prompt: string, imageId?: number | null, aspectRatio: string = "1:1") => {
+export const deleteImage = async (id: number) => {
+  const response = await api.delete(`/images/${id}`);
+  return response.data;
+};
+
+export const generateContent = async (prompt: string, imageIds: number[] = [], aspectRatio: string = "1:1") => {
   const formData = new FormData();
   formData.append('prompt', prompt);
-  if (imageId) {
-    formData.append('image_id', imageId.toString());
-  }
+  imageIds.forEach(id => formData.append('image_ids', id.toString()));
   formData.append('aspect_ratio', aspectRatio);
   const response = await api.post<Generation>('/generate', formData);
   return response.data;
+};
+
+export const generateFromTemplate = async (templateId: number, imageIds: number[] = []) => {
+    const formData = new FormData();
+    formData.append('template_id', templateId.toString());
+    imageIds.forEach(id => formData.append('image_ids', id.toString()));
+    const response = await api.post<Generation>('/generations/from-template', formData);
+    return response.data;
 };
 
 export const getHistory = async () => {
@@ -56,6 +77,37 @@ export const getGeneration = async (id: number) => {
 export const deleteGeneration = async (id: number) => {
   const response = await api.delete(`/generations/${id}`);
   return response.data;
+};
+
+// Template APIs
+export const createTemplate = async (name: string, promptTemplate: string, referenceImageIds: number[], aspectRatio: string) => {
+    const response = await api.post<Template>('/templates', {
+        name,
+        prompt_template: promptTemplate,
+        reference_image_ids: referenceImageIds,
+        aspect_ratio: aspectRatio,
+    });
+    return response.data;
+};
+
+export const updateTemplate = async (id: number, name: string, promptTemplate: string, referenceImageIds: number[], aspectRatio: string) => {
+    const response = await api.put<Template>(`/templates/${id}`, {
+        name,
+        prompt_template: promptTemplate,
+        reference_image_ids: referenceImageIds,
+        aspect_ratio: aspectRatio,
+    });
+    return response.data;
+};
+
+export const getTemplates = async () => {
+    const response = await api.get<Template[]>('/templates');
+    return response.data;
+};
+
+export const deleteTemplate = async (id: number) => {
+    const response = await api.delete(`/templates/${id}`);
+    return response.data;
 };
 
 export const sendLog = async (message: string, level: string = 'INFO') => {
