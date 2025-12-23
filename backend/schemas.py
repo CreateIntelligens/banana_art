@@ -38,6 +38,8 @@ class Generation(GenerationBase):
     id: int
     output_image_path: Optional[str] = None
     created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     source_images: List[UploadedImage] = []
 
     class Config:

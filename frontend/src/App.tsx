@@ -2,11 +2,35 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Upload, Image as ImageIcon, Send, History, RefreshCcw, Terminal, Trash2, Download, X, Maximize2, ZoomIn, Ratio, CheckCircle2, LayoutTemplate, Plus, Wand2, Edit } from 'lucide-react';
 import * as api from './api';
 
+// Helper to format duration
+const formatDuration = (start: string, end?: string) => {
+    if (!end) return null;
+    const duration = (new Date(end).getTime() - new Date(start).getTime()) / 1000;
+    return `${duration.toFixed(1)}s`;
+};
+
+// Helper to format detailed stats
+const formatStats = (created: string, started?: string, completed?: string) => {
+    if (!completed) return null;
+    const total = (new Date(completed).getTime() - new Date(created).getTime()) / 1000;
+    
+    let details = `Total: ${total.toFixed(1)}s`;
+    
+    if (started) {
+        const queue = (new Date(started).getTime() - new Date(created).getTime()) / 1000;
+        const exec = (new Date(completed).getTime() - new Date(started).getTime()) / 1000;
+        details += ` (Q: ${queue.toFixed(1)}s, E: ${exec.toFixed(1)}s)`;
+    }
+    
+    return details;
+};
+
 // Helper Component for Result Display
 const ResultDisplay = ({ generation, onZoom, copyToClipboard }: { generation: api.Generation, onZoom: () => void, copyToClipboard: (text: string) => void }) => {
     if (!generation || !generation.output_image_path) return null; // Ensure generation and path exist
     
     const promptToCopy = generation.prompt;
+    const stats = formatStats(generation.created_at, generation.started_at, generation.completed_at);
 
     return (
         <div className="w-full bg-gray-50 p-4 rounded-xl border border-gray-200 flex flex-col items-center">
@@ -29,6 +53,11 @@ const ResultDisplay = ({ generation, onZoom, copyToClipboard }: { generation: ap
                     <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity bg-black/10 rounded-lg pointer-events-none">
                          <Maximize2 className="text-white drop-shadow-md" size={32} />
                     </div>
+                </div>
+            )}
+            {stats && (
+                <div className="mt-2 text-xs text-gray-400 font-mono">
+                    {stats}
                 </div>
             )}
         </div>
@@ -722,7 +751,15 @@ function App() {
                   </div>
                   <div className="p-4 relative flex flex-col justify-between border-t border-gray-100">
                     <p className="text-sm text-gray-600 line-clamp-2 mb-4" title={gen.prompt}>{gen.prompt}</p>
-                    <div className="text-xs text-gray-400 flex justify-between items-end"> <span>{new Date(gen.created_at).toLocaleDateString()}</span> <button onClick={(e) => handleDelete(e, gen.id)} className="text-gray-400 hover:text-red-500 p-1.5 hover:bg-red-50 rounded-md transition-all" title="Delete"> <Trash2 size={16} /> </button> </div>
+                    <div className="text-xs text-gray-400 flex justify-between items-end"> 
+                        <div className="flex flex-col">
+                            <span>{new Date(gen.created_at).toLocaleDateString()}</span> 
+                            {formatStats(gen.created_at, gen.started_at, gen.completed_at) && (
+                                <span className="font-mono text-[10px] text-gray-300">{formatStats(gen.created_at, gen.started_at, gen.completed_at)}</span>
+                            )}
+                        </div>
+                        <button onClick={(e) => handleDelete(e, gen.id)} className="text-gray-400 hover:text-red-500 p-1.5 hover:bg-red-50 rounded-md transition-all" title="Delete"> <Trash2 size={16} /> </button> 
+                    </div>
                   </div>
                 </div>
               ))}

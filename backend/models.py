@@ -54,6 +54,8 @@ class Generation(Base):
     aspect_ratio = Column(String, default="1:1")
     output_image_path = Column(String, nullable=True) # Path to generated image
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Many-to-Many relationship
     source_images = relationship("UploadedImage", secondary=generation_inputs, back_populates="generations")

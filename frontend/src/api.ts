@@ -17,6 +17,8 @@ export interface Generation {
   source_image_id: number | null;
   output_image_path: string | null;
   created_at: string;
+  started_at?: string;
+  completed_at?: string;
   source_images: UploadedImage[];
   aspect_ratio?: string;
 }

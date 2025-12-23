@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 import google.generativeai as genai
 from dotenv import load_dotenv
 
-from backend import models, database, schemas
+from backend import models, database, schemas, migrate_db
 
 # Load env
 load_dotenv()
@@ -40,7 +40,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Setup DB
+# Run DB Migration (Auto-upgrade schema)
+try:
+    logger.info("Checking database schema...")
+    migrate_db.migrate()
+except Exception as e:
+    logger.error(f"Database migration failed: {e}")
+
+# Setup DB (Create missing tables)
 models.Base.metadata.create_all(bind=database.engine)
 
 # Setup App
@@ -64,7 +71,33 @@ else:
     logger.warning("GEMINI_API_KEY not set in .env")
 
 def generate_image_task(generation_id: int, prompt: str, image_paths: List[str], aspect_ratio: str, db: Session):
+    start_time = datetime.now()
+    
+    # 1. Record Started Time
+    gen_record = db.query(models.Generation).filter(models.Generation.id == generation_id).first()
+    if gen_record:
+        gen_record.started_at = start_time
+        db.commit()
+        # Calculate Queue Time
+        if gen_record.created_at:
+             # Make created_at offset-naive for calculation if it's offset-aware, or ensure both match. 
+             # SQLAlchemy defaults might be offset-naive. simpler to just use timestamp diff if needed, 
+             # but here let's assume both are compatible or standard datetime.
+             # Note: SQLite stores as string usually, but SQLAlchemy converts to datetime object.
+             # We'll just rely on datetime subtraction.
+             try:
+                # Ensure timezone info consistency (remove tz info for simple diff if mixed)
+                created_at_naive = gen_record.created_at.replace(tzinfo=None)
+                start_time_naive = start_time.replace(tzinfo=None)
+                queue_duration = (start_time_naive - created_at_naive).total_seconds()
+             except:
+                queue_duration = 0
+    else:
+        queue_duration = 0
+
     logger.info(f"Starting generation for ID {generation_id} with model {MODEL_NAME} (AR: {aspect_ratio}, Images: {len(image_paths)})")
+    logger.info(f"Task ID {generation_id} Queue Time: {queue_duration:.2f}s")
+
     try:
         model = genai.GenerativeModel(MODEL_NAME)
         
@@ -81,7 +114,12 @@ def generate_image_task(generation_id: int, prompt: str, image_paths: List[str],
              except Exception as file_err:
                  logger.error(f"Failed to upload file to Gemini {path}: {file_err}")
         
+        gemini_start = datetime.now()
         response = model.generate_content(content)
+        gemini_end = datetime.now()
+        
+        exec_duration = (gemini_end - gemini_start).total_seconds()
+        logger.info(f"Gemini generation (Execution Time) completed in {exec_duration:.2f} seconds")
         
         output_path_for_db = None
         generated_text = ""
@@ -138,13 +176,19 @@ def generate_image_task(generation_id: int, prompt: str, image_paths: List[str],
         gen_record = db.query(models.Generation).filter(models.Generation.id == generation_id).first()
         if gen_record:
             gen_record.output_image_path = output_path_for_db
+            gen_record.completed_at = datetime.now()
             db.commit()
+            
+            # Log Final Summary
+            total_duration = (gen_record.completed_at.replace(tzinfo=None) - gen_record.created_at.replace(tzinfo=None)).total_seconds()
+            logger.info(f"Task ID {generation_id} Finished. Total: {total_duration:.2f}s (Queue: {queue_duration:.2f}s, Exec: {exec_duration:.2f}s)")
             
     except Exception as e:
         logger.error(f"Generation failed: {e}")
         gen_record = db.query(models.Generation).filter(models.Generation.id == generation_id).first()
         if gen_record:
             gen_record.output_image_path = "error"
+            gen_record.completed_at = datetime.now()
             db.commit()
 
 def save_uploaded_file(file: UploadFile, db: Session) -> models.UploadedImage:
