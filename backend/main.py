@@ -191,7 +191,7 @@ def generate_image_task(generation_id: int, prompt: str, image_paths: List[str],
             gen_record.completed_at = datetime.now()
             db.commit()
 
-def save_uploaded_file(file: UploadFile, db: Session) -> models.UploadedImage:
+def save_uploaded_file(file: UploadFile, db: Session, is_hidden: bool = False) -> models.UploadedImage:
     """Helper to save uploaded file to disk and DB."""
     file_ext = os.path.splitext(file.filename)[1]
     new_filename = f"{uuid.uuid4()}{file_ext}"
@@ -200,7 +200,11 @@ def save_uploaded_file(file: UploadFile, db: Session) -> models.UploadedImage:
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
         
-    db_image = models.UploadedImage(filename=file.filename, filepath=f"/static/uploads/{new_filename}")
+    db_image = models.UploadedImage(
+        filename=file.filename, 
+        filepath=f"/static/uploads/{new_filename}",
+        is_hidden=is_hidden
+    )
     db.add(db_image)
     db.commit()
     db.refresh(db_image)
@@ -219,7 +223,8 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(datab
 
 @app.get("/api/images", response_model=List[schemas.UploadedImage])
 def get_images(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
-    images = db.query(models.UploadedImage).order_by(models.UploadedImage.upload_time.desc()).offset(skip).limit(limit).all()
+    # Only return images that are NOT hidden
+    images = db.query(models.UploadedImage).filter(models.UploadedImage.is_hidden == False).order_by(models.UploadedImage.upload_time.desc()).offset(skip).limit(limit).all()
     return images
 
 @app.delete("/api/images/{image_id}")
@@ -315,7 +320,8 @@ async def generate_content_direct(
     # Process file uploads
     for file in files:
         try:
-            new_img = save_uploaded_file(file, db)
+            # Mark these as hidden so they don't clutter the gallery selection
+            new_img = save_uploaded_file(file, db, is_hidden=True)
             uploaded_images.append(new_img)
             local_image_paths.append(os.path.join("backend", new_img.filepath.lstrip("/")))
         except Exception as e:
@@ -486,7 +492,8 @@ async def generate_from_template_direct(
     # 2. Process User Files
     for file in files:
         try:
-            new_img = save_uploaded_file(file, db)
+            # Mark these as hidden so they don't clutter the gallery selection
+            new_img = save_uploaded_file(file, db, is_hidden=True)
             all_source_images.append(new_img)
             local_image_paths.append(os.path.join("backend", new_img.filepath.lstrip("/")))
         except Exception as e:

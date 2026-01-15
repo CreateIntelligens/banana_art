@@ -66,8 +66,8 @@ export const generateFromTemplate = async (templateId: number, imageIds: number[
     return response.data;
 };
 
-export const getHistory = async () => {
-  const response = await api.get<Generation[]>('/history');
+export const getHistory = async (skip: number = 0, limit: number = 100) => {
+  const response = await api.get<Generation[]>('/history', { params: { skip, limit } });
   return response.data;
 };
 

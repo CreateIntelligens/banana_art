@@ -55,6 +55,25 @@ def migrate():
     else:
         print("Column 'started_at' already exists.")
 
+    # --- Check uploaded_images table ---
+    try:
+        cursor.execute("PRAGMA table_info(uploaded_images)")
+        img_columns = [info[1] for info in cursor.fetchall()]
+        
+        if 'is_hidden' not in img_columns:
+            print("Adding column 'is_hidden' to uploaded_images...")
+            try:
+                cursor.execute("ALTER TABLE uploaded_images ADD COLUMN is_hidden BOOLEAN DEFAULT 0")
+                conn.commit()
+                print("Done.")
+            except Exception as e:
+                print(f"Error adding is_hidden: {e}")
+        else:
+            print("Column 'is_hidden' already exists.")
+            
+    except sqlite3.OperationalError:
+        print("Table 'uploaded_images' check skipped (will be created by app).")
+
     conn.close()
     print("Migration completed successfully.")
 

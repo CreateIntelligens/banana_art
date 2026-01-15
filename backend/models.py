@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Table
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Table, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
@@ -26,6 +26,7 @@ class UploadedImage(Base):
     filename = Column(String, index=True)
     filepath = Column(String) # Path relative to backend/static or full path
     upload_time = Column(DateTime(timezone=True), server_default=func.now())
+    is_hidden = Column(Boolean, default=False)
     
     generations = relationship("Generation", secondary=generation_inputs, back_populates="source_images")
     templates = relationship("Template", secondary=template_inputs, back_populates="reference_images")
