@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Upload, Image as ImageIcon, Send, History, RefreshCcw, Terminal, Trash2, Download, X, Maximize2, ZoomIn, Ratio, CheckCircle2, LayoutTemplate, Plus, Wand2, Edit } from 'lucide-react';
+import { Upload, Image as ImageIcon, Send, History, RefreshCcw, Terminal, Trash2, Download, X, Maximize2, ZoomIn, Ratio, CheckCircle2, LayoutTemplate, Plus, Wand2, Edit, ChevronLeft, ChevronRight } from 'lucide-react';
 import * as api from './api';
+
+const ITEMS_PER_PAGE = 90;
 
 // Helper to format duration
 const formatDuration = (start: string, end?: string) => {
@@ -80,6 +82,10 @@ function App() {
   const [createLoading, setCreateLoading] = useState(false);
   const [applyLoading, setApplyLoading] = useState(false);
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMore, setHasMore] = useState(true);
+
   // Separate latest results for each generation tab
   const [latestCreateResult, setLatestCreateResult] = useState<api.Generation | null>(null);
   const [latestApplyResult, setLatestApplyResult] = useState<api.Generation | null>(null);
@@ -127,8 +133,10 @@ function App() {
 
   const fetchHistory = async () => {
     try {
-      const hist = await api.getHistory();
+      const skip = (currentPage - 1) * ITEMS_PER_PAGE;
+      const hist = await api.getHistory(skip, ITEMS_PER_PAGE);
       setGenerations(hist);
+      setHasMore(hist.length === ITEMS_PER_PAGE);
     } catch (e) {
       addLog(`Error fetching history: ${e}`);
     }
@@ -145,10 +153,16 @@ function App() {
 
   useEffect(() => {
     fetchImages();
-    fetchHistory();
+    // fetchHistory is called by the side-effect below
     fetchTemplates();
     addLog("Application started.");
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'gallery') {
+        fetchHistory();
+    }
+  }, [activeTab, currentPage]);
   
   // When active tab changes, clear selections and results to avoid confusion
   useEffect(() => {
@@ -225,7 +239,10 @@ function App() {
             if (contextTab === 'generate') setCreateLoading(false);
             else setApplyLoading(false);
 
-            setGenerations(prev => [genStatus, ...prev.filter(g => g.id !== genId)]); // Update full history
+            // Only update local history list if we are on page 1
+            if (currentPage === 1) {
+                 setGenerations(prev => [genStatus, ...prev.filter(g => g.id !== genId)]);
+            }
             
             // Set latest result based on the context tab
             if (contextTab === 'generate') {
@@ -735,34 +752,54 @@ function App() {
             </div>
           )}
           {activeTab === 'gallery' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {generations.map(gen => (
-                <div key={gen.id} className="bg-white border border-gray-100 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow group relative flex flex-col">
-                  <div className="flex-1 bg-gray-50 relative cursor-pointer overflow-hidden flex" onClick={() => setViewingItem({ type: 'generation', data: gen })}>
-                     {gen.source_images && gen.source_images.length > 0 ? (
-                         <>
-                            <div className="w-1/3 h-full border-r border-white/20 flex flex-col"> {gen.source_images.map((srcImg, idx) => ( <div key={srcImg.id} className="relative flex-1 w-full border-b border-white/10 last:border-b-0 overflow-hidden group/in"> <img src={srcImg.filepath} className="w-full h-full object-cover opacity-80" alt={`Input ${idx + 1}`} /> <div className="absolute bottom-1 left-1 bg-black/50 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm">IN {idx + 1}</div> </div> ))} </div>
-                            <div className="w-2/3 h-full relative"> {gen.output_image_path && !gen.output_image_path.endsWith('.txt') && gen.output_image_path !== 'error' ? ( <img src={gen.output_image_path} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt="Output" /> ) : ( <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Failed/Text</div> )} <div className="absolute bottom-1 right-1 bg-yellow-400 text-black font-bold text-[10px] px-1 rounded shadow-sm">OUT</div> </div>
-                         </>
-                     ) : (
-                         <div className="w-full h-full relative"> {gen.output_image_path && !gen.output_image_path.endsWith('.txt') && gen.output_image_path !== 'error' ? ( <img src={gen.output_image_path} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt="Output" /> ) : ( <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Failed/Text</div> )} </div>
-                     )}
-                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none"> <span className="bg-white/90 px-3 py-1 rounded-full text-xs font-medium shadow-sm flex items-center gap-1"> <ZoomIn size={12} /> View </span> </div>
-                  </div>
-                  <div className="p-4 relative flex flex-col justify-between border-t border-gray-100">
-                    <p className="text-sm text-gray-600 line-clamp-2 mb-4" title={gen.prompt}>{gen.prompt}</p>
-                    <div className="text-xs text-gray-400 flex justify-between items-end"> 
-                        <div className="flex flex-col">
-                            <span>{new Date(gen.created_at).toLocaleDateString()}</span> 
-                            {formatStats(gen.created_at, gen.started_at, gen.completed_at) && (
-                                <span className="font-mono text-[10px] text-gray-300">{formatStats(gen.created_at, gen.started_at, gen.completed_at)}</span>
-                            )}
-                        </div>
-                        <button onClick={(e) => handleDelete(e, gen.id)} className="text-gray-400 hover:text-red-500 p-1.5 hover:bg-red-50 rounded-md transition-all" title="Delete"> <Trash2 size={16} /> </button> 
+            <div className="flex flex-col gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {generations.map(gen => (
+                    <div key={gen.id} className="bg-white border border-gray-100 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow group relative flex flex-col">
+                    <div className="flex-1 bg-gray-50 relative cursor-pointer overflow-hidden flex" onClick={() => setViewingItem({ type: 'generation', data: gen })}>
+                        {gen.source_images && gen.source_images.length > 0 ? (
+                            <>
+                                <div className="w-1/3 h-full border-r border-white/20 flex flex-col"> {gen.source_images.map((srcImg, idx) => ( <div key={srcImg.id} className="relative flex-1 w-full border-b border-white/10 last:border-b-0 overflow-hidden group/in"> <img src={srcImg.filepath} className="w-full h-full object-cover opacity-80" alt={`Input ${idx + 1}`} /> <div className="absolute bottom-1 left-1 bg-black/50 text-white text-[10px] px-1.5 py-0.5 rounded backdrop-blur-sm">IN {idx + 1}</div> </div> ))} </div>
+                                <div className="w-2/3 h-full relative"> {gen.output_image_path && !gen.output_image_path.endsWith('.txt') && gen.output_image_path !== 'error' ? ( <img src={gen.output_image_path} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt="Output" /> ) : ( <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Failed/Text</div> )} <div className="absolute bottom-1 right-1 bg-yellow-400 text-black font-bold text-[10px] px-1 rounded shadow-sm">OUT</div> </div>
+                            </>
+                        ) : (
+                            <div className="w-full h-full relative"> {gen.output_image_path && !gen.output_image_path.endsWith('.txt') && gen.output_image_path !== 'error' ? ( <img src={gen.output_image_path} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt="Output" /> ) : ( <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">Failed/Text</div> )} </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none"> <span className="bg-white/90 px-3 py-1 rounded-full text-xs font-medium shadow-sm flex items-center gap-1"> <ZoomIn size={12} /> View </span> </div>
                     </div>
-                  </div>
+                    <div className="p-4 relative flex flex-col justify-between border-t border-gray-100">
+                        <p className="text-sm text-gray-600 line-clamp-2 mb-4" title={gen.prompt}>{gen.prompt}</p>
+                        <div className="text-xs text-gray-400 flex justify-between items-end"> 
+                            <div className="flex flex-col">
+                                <span>{new Date(gen.created_at).toLocaleDateString()}</span> 
+                                {formatStats(gen.created_at, gen.started_at, gen.completed_at) && (
+                                    <span className="font-mono text-[10px] text-gray-300">{formatStats(gen.created_at, gen.started_at, gen.completed_at)}</span>
+                                )}
+                            </div>
+                            <button onClick={(e) => handleDelete(e, gen.id)} className="text-gray-400 hover:text-red-500 p-1.5 hover:bg-red-50 rounded-md transition-all" title="Delete"> <Trash2 size={16} /> </button> 
+                        </div>
+                    </div>
+                    </div>
+                ))}
                 </div>
-              ))}
+                {/* Pagination Controls */}
+                <div className="flex justify-center items-center gap-4 py-8">
+                    <button 
+                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="p-2 rounded-full border border-gray-300 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                        <ChevronLeft size={20} />
+                    </button>
+                    <span className="font-medium text-sm text-gray-600">Page {currentPage}</span>
+                    <button 
+                        onClick={() => setCurrentPage(p => p + 1)}
+                        disabled={!hasMore}
+                        className="p-2 rounded-full border border-gray-300 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                        <ChevronRight size={20} />
+                    </button>
+                </div>
             </div>
           )}
         </div>
