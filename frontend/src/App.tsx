@@ -4,6 +4,14 @@ import * as api from './api';
 
 const ITEMS_PER_PAGE = 90;
 
+// Helper to ensure date is treated as UTC then converted to Taiwan Time
+const toTaiwanTime = (dateStr?: string) => {
+    if (!dateStr) return '';
+    // If it doesn't end with Z and doesn't have an offset like +00:00, assume it's UTC and append Z
+    const normalizedStr = (dateStr.endsWith('Z') || dateStr.includes('+')) ? dateStr : dateStr + 'Z';
+    return new Date(normalizedStr).toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false });
+};
+
 // Helper to format duration
 const formatDuration = (start: string, end?: string) => {
     if (!end) return null;
@@ -116,7 +124,7 @@ function App() {
   ];
 
   const addLog = (msg: string) => {
-    const timestamp = new Date().toLocaleTimeString();
+    const timestamp = new Date().toLocaleString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }).split(' ')[1];
     const logEntry = `[${timestamp}] ${msg}`;
     setLogs(prev => [logEntry, ...prev]);
     api.sendLog(msg);
@@ -770,10 +778,17 @@ function App() {
                     <div className="p-4 relative flex flex-col justify-between border-t border-gray-100">
                         <p className="text-sm text-gray-600 line-clamp-2 mb-4" title={gen.prompt}>{gen.prompt}</p>
                         <div className="text-xs text-gray-400 flex justify-between items-end"> 
-                            <div className="flex flex-col">
-                                <span>{new Date(gen.created_at).toLocaleDateString()}</span> 
+                            <div className="flex flex-col gap-0.5 text-[10px]">
+                                <div className="flex items-center gap-2 mb-0.5">
+                                    <span className="font-bold text-gray-500">ID: #{gen.id}</span>
+                                </div>
+                                <div className="flex flex-wrap gap-x-4">
+                                    {gen.started_at && <span className="opacity-80 whitespace-nowrap">Start: {toTaiwanTime(gen.started_at)}</span>}
+                                    {gen.completed_at && <span className="font-medium text-gray-500 whitespace-nowrap">End: {toTaiwanTime(gen.completed_at)}</span>}
+                                </div>
+                                {!gen.started_at && !gen.completed_at && <span>Created: {toTaiwanTime(gen.created_at)}</span>}
                                 {formatStats(gen.created_at, gen.started_at, gen.completed_at) && (
-                                    <span className="font-mono text-[10px] text-gray-300">{formatStats(gen.created_at, gen.started_at, gen.completed_at)}</span>
+                                    <span className="font-mono text-gray-300">{formatStats(gen.created_at, gen.started_at, gen.completed_at)}</span>
                                 )}
                             </div>
                             <button onClick={(e) => handleDelete(e, gen.id)} className="text-gray-400 hover:text-red-500 p-1.5 hover:bg-red-50 rounded-md transition-all" title="Delete"> <Trash2 size={16} /> </button> 

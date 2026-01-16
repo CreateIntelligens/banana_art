@@ -15,6 +15,8 @@ from dotenv import load_dotenv
 
 from backend import models, database, schemas, migrate_db
 
+import time
+
 # Load env
 load_dotenv()
 
@@ -529,6 +531,52 @@ async def generate_from_template_direct(
     )
     
     return db_gen
+
+@app.post("/api/generations2/from-template-direct", response_model=schemas.Generation)
+async def generate_from_template_direct2(
+    template_id: int = Form(...),
+    # files: List[UploadFile] = File(...), # User's content images (Direct Upload)
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    db: Session = Depends(database.get_db)
+):
+    """
+    Direct template generation endpoint that accepts image files.
+    
+    - **template_id**: ID of the template.
+    - **files**: List of image files to upload and use as User Images.
+    
+    **Order**: User Files -> Template Images.
+    """
+    logger.info(f"Direct template generation: TemplateID={template_id}")
+
+    time.sleep(3)  # Simulate processing delay for testing
+    return {
+        "id": 1,
+        "prompt": f"test template {template_id}",
+        "output_image_path": None,
+        "created_at": datetime.now(),
+        "started_at": None,
+        "completed_at": None,
+        "source_images": [],
+        "source_image_id": None,
+        "aspect_ratio": "1:1"
+    }
+
+
+@app.get("/api/generations2/{gen_id}", response_model=schemas.Generation)
+def get_generation2(gen_id: int, db: Session = Depends(database.get_db)):
+    time.sleep(3)  # Simulate processing delay for testing
+    return {
+        "id": gen_id,
+        "prompt": "test prompt",
+        "output_image_path": None,
+        "created_at": datetime.now(),
+        "started_at": None,
+        "completed_at": None,
+        "source_images": [],
+        "source_image_id": None,
+        "aspect_ratio": "1:1"
+    }
 
 # ... other endpoints ...
 
