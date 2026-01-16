@@ -15,7 +15,9 @@ services:
     environment:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-    command: uvicorn backend.main:app --host 0.0.0.0 --port 7588 --reload
+    # command: uvicorn backend.main:app --host 0.0.0.0 --port 7588 --reload
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 7588 
+
 
   frontend:
     image: node:20-alpine

@@ -44,3 +44,7 @@ class Generation(GenerationBase):
 
     class Config:
         from_attributes = True
+
+class GenerationHistoryResponse(BaseModel):
+    total: int
+    items: List[Generation]

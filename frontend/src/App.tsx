@@ -93,6 +93,14 @@ function App() {
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
+  const [totalCount, setTotalCount] = useState(0);
+  const [jumpPage, setJumpPage] = useState('');
+
+  // Filter State
+  const [searchId, setSearchId] = useState('');
+  const [searchPrompt, setSearchPrompt] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
 
   // Separate latest results for each generation tab
   const [latestCreateResult, setLatestCreateResult] = useState<api.Generation | null>(null);
@@ -142,9 +150,19 @@ function App() {
   const fetchHistory = async () => {
     try {
       const skip = (currentPage - 1) * ITEMS_PER_PAGE;
-      const hist = await api.getHistory(skip, ITEMS_PER_PAGE);
-      setGenerations(hist);
-      setHasMore(hist.length === ITEMS_PER_PAGE);
+      const params: api.HistoryParams = {
+          skip, 
+          limit: ITEMS_PER_PAGE,
+          search_id: searchId ? parseInt(searchId) : undefined,
+          search_prompt: searchPrompt || undefined,
+          start_date: startDate || undefined,
+          end_date: endDate || undefined
+      };
+      
+      const response = await api.getHistory(params);
+      setGenerations(response.items);
+      setTotalCount(response.total);
+      setHasMore(response.items.length === ITEMS_PER_PAGE && (skip + ITEMS_PER_PAGE) < response.total);
     } catch (e) {
       addLog(`Error fetching history: ${e}`);
     }
@@ -171,6 +189,23 @@ function App() {
         fetchHistory();
     }
   }, [activeTab, currentPage]);
+
+  // Refetch when filters change (debounce could be added here for optimization)
+  useEffect(() => {
+      if (activeTab === 'gallery') {
+          setCurrentPage(1); // Reset to page 1 on filter change
+          fetchHistory();
+      }
+  }, [searchId, searchPrompt, startDate, endDate]);
+  
+  const handleJumpPage = (e: React.FormEvent) => {
+      e.preventDefault();
+      const page = parseInt(jumpPage);
+      if (page > 0) {
+          setCurrentPage(page);
+          setJumpPage('');
+      }
+  };
   
   // When active tab changes, clear selections and results to avoid confusion
   useEffect(() => {
@@ -761,6 +796,58 @@ function App() {
           )}
           {activeTab === 'gallery' && (
             <div className="flex flex-col gap-6">
+                {/* Search Toolbar */}
+                <div className="bg-gray-50 p-4 rounded-xl border border-gray-200 flex flex-wrap gap-4 items-end">
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold text-gray-500 uppercase">ID</label>
+                        <input 
+                            type="number" 
+                            placeholder="#" 
+                            className="w-24 p-2 border rounded-lg text-sm"
+                            value={searchId}
+                            onChange={(e) => setSearchId(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex flex-col gap-1 flex-1 min-w-[200px]">
+                        <label className="text-xs font-bold text-gray-500 uppercase">Prompt</label>
+                        <input 
+                            type="text" 
+                            placeholder="Search prompt..." 
+                            className="w-full p-2 border rounded-lg text-sm"
+                            value={searchPrompt}
+                            onChange={(e) => setSearchPrompt(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold text-gray-500 uppercase">Start Time</label>
+                        <input 
+                            type="datetime-local" 
+                            className="p-2 border rounded-lg text-sm"
+                            value={startDate}
+                            onChange={(e) => setStartDate(e.target.value)}
+                        />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold text-gray-500 uppercase">End Time</label>
+                        <input 
+                            type="datetime-local" 
+                            className="p-2 border rounded-lg text-sm"
+                            value={endDate}
+                            onChange={(e) => setEndDate(e.target.value)}
+                        />
+                    </div>
+                    <button 
+                        onClick={() => { setSearchId(''); setSearchPrompt(''); setStartDate(''); setEndDate(''); }}
+                        className="px-4 py-2 bg-white border border-gray-300 rounded-lg text-sm hover:bg-gray-100 text-gray-600 h-[38px]"
+                    >
+                        Clear
+                    </button>
+                </div>
+
+                <div className="flex justify-between items-center text-sm text-gray-500 px-1">
+                    <span>Showing {generations.length} of {totalCount} generations</span>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {generations.map(gen => (
                     <div key={gen.id} className="bg-white border border-gray-100 rounded-xl overflow-hidden shadow-sm hover:shadow-md transition-shadow group relative flex flex-col">
@@ -806,7 +893,21 @@ function App() {
                     >
                         <ChevronLeft size={20} />
                     </button>
-                    <span className="font-medium text-sm text-gray-600">Page {currentPage}</span>
+                    
+                    <div className="flex items-center gap-2">
+                        <span className="font-medium text-sm text-gray-600">Page</span>
+                        <form onSubmit={handleJumpPage}>
+                            <input 
+                                type="number" 
+                                className="w-12 text-center p-1 border rounded text-sm font-medium" 
+                                value={jumpPage || currentPage} 
+                                onChange={(e) => setJumpPage(e.target.value)}
+                                onBlur={() => setJumpPage('')} // Reset on blur to show current page
+                                min={1}
+                            />
+                        </form>
+                    </div>
+
                     <button 
                         onClick={() => setCurrentPage(p => p + 1)}
                         disabled={!hasMore}

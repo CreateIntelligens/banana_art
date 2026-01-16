@@ -3,7 +3,7 @@ import logging
 import shutil
 import uuid
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
@@ -580,10 +580,52 @@ def get_generation2(gen_id: int, db: Session = Depends(database.get_db)):
 
 # ... other endpoints ...
 
-@app.get("/api/history", response_model=List[schemas.Generation])
-def get_history(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
-    history = db.query(models.Generation).order_by(models.Generation.created_at.desc()).offset(skip).limit(limit).all()
-    return history
+@app.get("/api/history", response_model=schemas.GenerationHistoryResponse)
+def get_history(
+    skip: int = 0, 
+    limit: int = 100, 
+    search_id: Optional[int] = None,
+    search_prompt: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    db: Session = Depends(database.get_db)
+):
+    query = db.query(models.Generation)
+    
+    if search_id:
+        query = query.filter(models.Generation.id == search_id)
+        
+    if search_prompt:
+        query = query.filter(models.Generation.prompt.contains(search_prompt))
+        
+    if start_date:
+        try:
+            if "T" in start_date:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%dT%H:%M")
+            else:
+                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            start_dt_utc = start_dt - timedelta(hours=8)
+            query = query.filter(models.Generation.created_at >= start_dt_utc)
+        except ValueError:
+            pass
+            
+    if end_date:
+        try:
+            if "T" in end_date:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%dT%H:%M")
+            else:
+                end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+            end_dt_utc = end_dt - timedelta(hours=8)
+            query = query.filter(models.Generation.created_at <= end_dt_utc)
+        except ValueError:
+            pass
+
+    # Get total count before applying pagination
+    total_count = query.count()
+    
+    history = query.order_by(models.Generation.id.desc()).offset(skip).limit(limit).all()
+    
+    return {"total": total_count, "items": history}
 
 @app.get("/api/generations/{gen_id}", response_model=schemas.Generation)
 def get_generation(gen_id: int, db: Session = Depends(database.get_db)):
