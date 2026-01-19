@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 import google.generativeai as genai
 from dotenv import load_dotenv
+import anyio # Import anyio
 
 from backend import models, database, schemas, migrate_db
 
@@ -62,6 +63,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+async def startup_event():
+    # Increase the default thread pool limit to handle more concurrent background tasks
+    # Default is usually 40, we set it to 150 to match DB pool size
+    limiter = anyio.to_thread.current_default_thread_limiter()
+    limiter.total_tokens = 150
+    logger.info(f"Thread pool limit increased to {limiter.total_tokens}")
 
 # Mount Static
 app.mount("/static", StaticFiles(directory="backend/static"), name="static")
