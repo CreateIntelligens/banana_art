@@ -17,7 +17,7 @@ services:
       - PYTHONUNBUFFERED=1
     # command: uvicorn backend.main:app --host 0.0.0.0 --port 7588 --reload
     command: uvicorn backend.main:app --host 0.0.0.0 --port 7588 
-
+    restart: always
 
   frontend:
     image: node:20-alpine
@@ -30,3 +30,4 @@ services:
     command: sh -c "npm install && npm run dev -- --host"
     depends_on:
       - backend
+    restart: always
