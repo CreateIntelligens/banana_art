@@ -5,7 +5,7 @@ import uuid
 from typing import List, Optional
 from datetime import datetime, timedelta
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, Query, Depends, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -15,8 +15,6 @@ from dotenv import load_dotenv
 import anyio # Import anyio
 
 from backend import models, database, schemas, migrate_db
-
-import time
 
 # Load env
 load_dotenv()
@@ -54,7 +52,15 @@ except Exception as e:
 models.Base.metadata.create_all(bind=database.engine)
 
 # Setup App
-app = FastAPI()
+app = FastAPI(
+    title="Banana Art API",
+    description=(
+        "Backend API for Banana Art: upload reference images, manage reusable "
+        "generation templates, and generate AI images (Gemini) either directly "
+        "from a prompt + images, or by applying a saved template."
+    ),
+    version="1.0.0",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -221,8 +227,18 @@ def save_uploaded_file(file: UploadFile, db: Session, is_hidden: bool = False) -
     db.refresh(db_image)
     return db_image
 
-@app.post("/api/upload", response_model=schemas.UploadedImage)
-async def upload_image(file: UploadFile = File(...), db: Session = Depends(database.get_db)):
+@app.post(
+    "/api/upload",
+    response_model=schemas.UploadedImageOut,
+    tags=["Images"],
+    summary="Upload an image",
+    responses={500: {"model": schemas.ErrorResponse, "description": "Failed to save the uploaded file."}},
+    description="Upload a single image file, save it to disk under backend/static/uploads, and store a record for it. The returned image ID can be used in image_ids for /api/generate and /api/templates.",
+)
+async def upload_image(
+    file: UploadFile = File(..., description="Image file to upload (jpg/png/webp, etc.)."),
+    db: Session = Depends(database.get_db),
+):
     logger.info(f"Receiving upload: {file.filename}")
     try:
         db_image = save_uploaded_file(file, db)
@@ -232,18 +248,35 @@ async def upload_image(file: UploadFile = File(...), db: Session = Depends(datab
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/images", response_model=List[schemas.UploadedImage])
-def get_images(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+@app.get(
+    "/api/images",
+    response_model=List[schemas.UploadedImageOut],
+    tags=["Images"],
+    summary="List uploaded images",
+    description="List previously uploaded, non-hidden images (newest first). Images uploaded via the 'direct' generation endpoints (is_hidden=true) are excluded so they don't clutter the gallery.",
+)
+def get_images(
+    skip: int = Query(0, description="Number of records to skip (for pagination)."),
+    limit: int = Query(100, description="Maximum number of records to return."),
+    db: Session = Depends(database.get_db),
+):
     # Only return images that are NOT hidden
     images = db.query(models.UploadedImage).filter(models.UploadedImage.is_hidden == False).order_by(models.UploadedImage.upload_time.desc()).offset(skip).limit(limit).all()
     return images
 
-@app.delete("/api/images/{image_id}")
+@app.delete(
+    "/api/images/{image_id}",
+    response_model=schemas.StatusResponse,
+    tags=["Images"],
+    summary="Delete an uploaded image",
+    description="Delete an uploaded image's file from disk and its database record. 404 if the image does not exist.",
+    responses={404: {"model": schemas.ErrorResponse, "description": "Image not found."}},
+)
 def delete_image(image_id: int, db: Session = Depends(database.get_db)):
     image = db.query(models.UploadedImage).filter(models.UploadedImage.id == image_id).first()
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
-    
+
     # Remove from filesystem
     local_path = os.path.join("backend", image.filepath.lstrip("/"))
     if os.path.exists(local_path):
@@ -256,19 +289,31 @@ def delete_image(image_id: int, db: Session = Depends(database.get_db)):
     db.commit()
     return {"status": "deleted"}
 
-@app.post("/api/generate", response_model=schemas.Generation)
+@app.post(
+    "/api/generate",
+    response_model=schemas.GenerationOut,
+    tags=["Generation"],
+    summary="Generate an image from a prompt and previously uploaded images",
+    description=(
+        "Create a generation request using a raw prompt and zero or more previously-uploaded image IDs "
+        "(see POST /api/upload). Generation runs asynchronously in the background; poll "
+        "GET /api/generations/{gen_id} until completed_at is set. If generation fails, output_image_path "
+        "will be set to the literal string 'error' rather than an HTTP error status, since failures happen "
+        "after this endpoint has already returned 200."
+    ),
+)
 async def generate_content(
-    prompt: str = Form(...), 
-    image_ids: List[int] = Form([]),
-    aspect_ratio: str = Form("1:1"),
+    prompt: str = Form(..., description="Text description of the desired image. May reference images positionally, e.g. 'Image 1', 'Image 2'."),
+    image_ids: List[int] = Form([], description="IDs of uploaded images to use as context. Images are sent to the model in the exact order given here (1st, 2nd, etc.)."),
+    aspect_ratio: str = Form("1:1", description="Desired aspect ratio for the output (e.g. '1:1', '4:3', '9:16'). Passed to the model as text guidance."),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(database.get_db)
 ):
     """
     Generate content using Gemini model.
-    
+
     - **prompt**: Text description of the desired image.
-    - **image_ids**: List of uploaded image IDs to be used as context. 
+    - **image_ids**: List of uploaded image IDs to be used as context.
       **Ordering**: Images are sent to the model in the exact order they are provided in this list (1st, 2nd, etc.).
     - **aspect_ratio**: Desired aspect ratio for the output (e.g., "1:1", "16:9").
     """
@@ -307,18 +352,29 @@ async def generate_content(
     
     return db_gen
 
-@app.post("/api/generate-direct", response_model=schemas.Generation)
+@app.post(
+    "/api/generate-direct",
+    response_model=schemas.GenerationOut,
+    tags=["Generation"],
+    summary="Generate an image from a prompt and raw file uploads",
+    description=(
+        "Like POST /api/generate, but accepts raw image files instead of image_ids, uploading them in the same "
+        "request. Useful for external integrations (e.g. Postman, scripts) that don't already have image IDs. "
+        "Uploaded files are marked hidden so they don't appear in GET /api/images."
+    ),
+    responses={500: {"model": schemas.ErrorResponse, "description": "Failed to save one of the uploaded files."}},
+)
 async def generate_content_direct(
-    prompt: str = Form(...), 
-    files: List[UploadFile] = File(...),
-    aspect_ratio: str = Form("1:1"),
+    prompt: str = Form(..., description="Text description of the desired image."),
+    files: List[UploadFile] = File(..., description="Image files to upload and use as context, in the order they should be sent to the model."),
+    aspect_ratio: str = Form("1:1", description="Desired aspect ratio for the output (e.g. '1:1', '4:3', '9:16')."),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(database.get_db)
 ):
     """
     Direct generation endpoint that accepts image files instead of IDs.
     Useful for external integrations (e.g., Postman, Scripts).
-    
+
     - **prompt**: Text description.
     - **files**: List of image files to upload and use.
     - **aspect_ratio**: Output aspect ratio.
@@ -353,23 +409,36 @@ async def generate_content_direct(
     return db_gen
 
 # Template APIs
-@app.post("/api/templates", response_model=schemas.Template)
+@app.post(
+    "/api/templates",
+    response_model=schemas.TemplateOut,
+    tags=["Templates"],
+    summary="Create a template",
+    description="Create a reusable generation template: a prompt, an aspect ratio, and a fixed set of reference images (e.g. attire/background) applied every time this template is used via /api/generations/from-template.",
+)
 def create_template(
     template: schemas.TemplateCreate,
     db: Session = Depends(database.get_db)
 ):
     db_template = models.Template(name=template.name, prompt_template=template.prompt_template, aspect_ratio=template.aspect_ratio)
-    
+
     if template.reference_image_ids:
         imgs = db.query(models.UploadedImage).filter(models.UploadedImage.id.in_(template.reference_image_ids)).all()
         db_template.reference_images = imgs
-        
+
     db.add(db_template)
     db.commit()
     db.refresh(db_template)
     return db_template
 
-@app.put("/api/templates/{tmpl_id}", response_model=schemas.Template)
+@app.put(
+    "/api/templates/{tmpl_id}",
+    response_model=schemas.TemplateOut,
+    tags=["Templates"],
+    summary="Update a template",
+    description="Replace a template's name, prompt, aspect ratio, and reference images. 404 if the template does not exist.",
+    responses={404: {"model": schemas.ErrorResponse, "description": "Template not found."}},
+)
 def update_template(
     tmpl_id: int,
     template: schemas.TemplateCreate,
@@ -378,24 +447,41 @@ def update_template(
     db_template = db.query(models.Template).filter(models.Template.id == tmpl_id).first()
     if not db_template:
         raise HTTPException(status_code=404, detail="Template not found")
-    
+
     db_template.name = template.name
     db_template.prompt_template = template.prompt_template
     db_template.aspect_ratio = template.aspect_ratio
-    
+
     if template.reference_image_ids is not None:
         imgs = db.query(models.UploadedImage).filter(models.UploadedImage.id.in_(template.reference_image_ids)).all()
         db_template.reference_images = imgs
-        
+
     db.commit()
     db.refresh(db_template)
     return db_template
 
-@app.get("/api/templates", response_model=List[schemas.Template])
-def get_templates(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+@app.get(
+    "/api/templates",
+    response_model=List[schemas.TemplateOut],
+    tags=["Templates"],
+    summary="List templates",
+    description="List saved templates.",
+)
+def get_templates(
+    skip: int = Query(0, description="Number of records to skip (for pagination)."),
+    limit: int = Query(100, description="Maximum number of records to return."),
+    db: Session = Depends(database.get_db),
+):
     return db.query(models.Template).offset(skip).limit(limit).all()
 
-@app.delete("/api/templates/{tmpl_id}")
+@app.delete(
+    "/api/templates/{tmpl_id}",
+    response_model=schemas.StatusResponse,
+    tags=["Templates"],
+    summary="Delete a template",
+    description="Delete a template's database record. Does not delete the underlying reference images (they may be shared with other templates or generations). 404 if the template does not exist.",
+    responses={404: {"model": schemas.ErrorResponse, "description": "Template not found."}},
+)
 def delete_template(tmpl_id: int, db: Session = Depends(database.get_db)):
     tmpl = db.query(models.Template).filter(models.Template.id == tmpl_id).first()
     if not tmpl:
@@ -404,10 +490,21 @@ def delete_template(tmpl_id: int, db: Session = Depends(database.get_db)):
     db.commit()
     return {"status": "deleted"}
 
-@app.post("/api/generations/from-template", response_model=schemas.Generation)
+@app.post(
+    "/api/generations/from-template",
+    response_model=schemas.GenerationOut,
+    tags=["Generation"],
+    summary="Generate an image by applying a template to previously uploaded images",
+    description=(
+        "Merge a user's uploaded images with a template's saved prompt, aspect ratio, and reference images, "
+        "then generate. The template's prompt_template is used verbatim (not the request body). Generation runs "
+        "asynchronously in the background; poll GET /api/generations/{gen_id} until completed_at is set."
+    ),
+    responses={404: {"model": schemas.ErrorResponse, "description": "Template not found."}},
+)
 async def generate_from_template(
-    template_id: int = Form(...),
-    image_ids: List[int] = Form([]), # User's content images
+    template_id: int = Form(..., description="ID of the template to apply (see GET /api/templates)."),
+    image_ids: List[int] = Form([], description="IDs of the user's uploaded images (e.g. identity photos). Sent to the model first, in this order, followed by the template's own reference images."),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(database.get_db)
 ):
@@ -475,19 +572,32 @@ async def generate_from_template(
     
     return db_gen
 
-@app.post("/api/generations/from-template-direct", response_model=schemas.Generation)
+@app.post(
+    "/api/generations/from-template-direct",
+    response_model=schemas.GenerationOut,
+    tags=["Generation"],
+    summary="Generate an image by applying a template to raw file uploads",
+    description=(
+        "Like POST /api/generations/from-template, but accepts raw image files instead of image_ids, uploading "
+        "them in the same request. Uploaded files are marked hidden so they don't appear in GET /api/images."
+    ),
+    responses={
+        404: {"model": schemas.ErrorResponse, "description": "Template not found."},
+        500: {"model": schemas.ErrorResponse, "description": "Failed to save one of the uploaded files."},
+    },
+)
 async def generate_from_template_direct(
-    template_id: int = Form(...),
-    files: List[UploadFile] = File(...), # User's content images (Direct Upload)
+    template_id: int = Form(..., description="ID of the template to apply (see GET /api/templates)."),
+    files: List[UploadFile] = File(..., description="User's content image files (e.g. identity photos), in the order they should be sent to the model. Template reference images are appended after these."),
     background_tasks: BackgroundTasks = BackgroundTasks(),
     db: Session = Depends(database.get_db)
 ):
     """
     Direct template generation endpoint that accepts image files.
-    
+
     - **template_id**: ID of the template.
     - **files**: List of image files to upload and use as User Images.
-    
+
     **Order**: User Files -> Template Images.
     """
     logger.info(f"Direct template generation: TemplateID={template_id}, Files={len(files)}")
@@ -541,62 +651,20 @@ async def generate_from_template_direct(
     
     return db_gen
 
-@app.post("/api/generations2/from-template-direct", response_model=schemas.Generation)
-async def generate_from_template_direct2(
-    template_id: int = Form(...),
-    # files: List[UploadFile] = File(...), # User's content images (Direct Upload)
-    background_tasks: BackgroundTasks = BackgroundTasks(),
-    db: Session = Depends(database.get_db)
-):
-    """
-    Direct template generation endpoint that accepts image files.
-    
-    - **template_id**: ID of the template.
-    - **files**: List of image files to upload and use as User Images.
-    
-    **Order**: User Files -> Template Images.
-    """
-    logger.info(f"Direct template generation: TemplateID={template_id}")
-
-    time.sleep(3)  # Simulate processing delay for testing
-    return {
-        "id": 1,
-        "prompt": f"test template {template_id}",
-        "output_image_path": None,
-        "created_at": datetime.now(),
-        "started_at": None,
-        "completed_at": None,
-        "source_images": [],
-        "source_image_id": None,
-        "aspect_ratio": "1:1"
-    }
-
-
-@app.get("/api/generations2/{gen_id}", response_model=schemas.Generation)
-def get_generation2(gen_id: int, db: Session = Depends(database.get_db)):
-    time.sleep(3)  # Simulate processing delay for testing
-    return {
-        "id": gen_id,
-        "prompt": "test prompt",
-        "output_image_path": None,
-        "created_at": datetime.now(),
-        "started_at": None,
-        "completed_at": None,
-        "source_images": [],
-        "source_image_id": None,
-        "aspect_ratio": "1:1"
-    }
-
-# ... other endpoints ...
-
-@app.get("/api/history", response_model=schemas.GenerationHistoryResponse)
+@app.get(
+    "/api/history",
+    response_model=schemas.HistoryResponse,
+    tags=["History"],
+    summary="Search and list generation history",
+    description="List generation records (newest first), with optional filtering by ID, prompt substring, and creation date range. Returns a total count alongside the current page for building pagination controls.",
+)
 def get_history(
-    skip: int = 0, 
-    limit: int = 100, 
-    search_id: Optional[int] = None,
-    search_prompt: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    skip: int = Query(0, description="Number of records to skip (for pagination)."),
+    limit: int = Query(100, description="Maximum number of records to return."),
+    search_id: Optional[int] = Query(None, description="Return only the generation with this exact ID."),
+    search_prompt: Optional[str] = Query(None, description="Case-sensitive substring match against the generation's prompt text."),
+    start_date: Optional[str] = Query(None, description="Only include generations created at/after this local (UTC+8) date. Accepts 'YYYY-MM-DD' or 'YYYY-MM-DDTHH:MM'."),
+    end_date: Optional[str] = Query(None, description="Only include generations created at/before this local (UTC+8) date. Accepts 'YYYY-MM-DD' (end of day) or 'YYYY-MM-DDTHH:MM'."),
     db: Session = Depends(database.get_db)
 ):
     query = db.query(models.Generation)
@@ -636,19 +704,44 @@ def get_history(
     
     return {"total": total_count, "items": history}
 
-@app.get("/api/generations/{gen_id}", response_model=schemas.Generation)
+@app.get(
+    "/api/generations/{gen_id}",
+    response_model=schemas.GenerationOut,
+    tags=["History"],
+    summary="Get a single generation record",
+    description="Fetch one generation record by ID, including its full source_images list and current status. Poll this after creating a generation to detect completion (completed_at becomes non-null).",
+    responses={404: {"model": schemas.ErrorResponse, "description": "Generation not found."}},
+)
 def get_generation(gen_id: int, db: Session = Depends(database.get_db)):
     gen = db.query(models.Generation).filter(models.Generation.id == gen_id).first()
     if not gen:
         raise HTTPException(status_code=404, detail="Generation not found")
     return gen
 
-@app.delete("/api/generations/{gen_id}")
+@app.get(
+    "/api/generations/{gen_id}/status",
+    response_model=schemas.GenerationOut,
+    tags=["History"],
+    summary="Get a single generation record (alias)",
+    description="Alias for GET /api/generations/{gen_id}; returns the exact same generation record. Provided for clients that prefer an explicit '/status' path when polling for completion.",
+    responses={404: {"model": schemas.ErrorResponse, "description": "Generation not found."}},
+)
+def get_generation_status(gen_id: int, db: Session = Depends(database.get_db)):
+    return get_generation(gen_id, db)
+
+@app.delete(
+    "/api/generations/{gen_id}",
+    response_model=schemas.StatusResponse,
+    tags=["History"],
+    summary="Delete a generation record",
+    description="Delete a generation's database record and its generated output file (if any). Does not delete the source images used as input. 404 if the generation does not exist.",
+    responses={404: {"model": schemas.ErrorResponse, "description": "Generation not found."}},
+)
 def delete_generation(gen_id: int, db: Session = Depends(database.get_db)):
     gen = db.query(models.Generation).filter(models.Generation.id == gen_id).first()
     if not gen:
         raise HTTPException(status_code=404, detail="Generation not found")
-    
+
     if gen.output_image_path and gen.output_image_path != "error" and not gen.output_image_path.endswith(".txt"):
          local_path = os.path.join("backend", gen.output_image_path.lstrip("/"))
          if os.path.exists(local_path):
@@ -661,7 +754,18 @@ def delete_generation(gen_id: int, db: Session = Depends(database.get_db)):
     db.commit()
     return {"status": "deleted"}
 
-@app.post("/api/client-log")
+@app.post(
+    "/api/client-log",
+    response_model=schemas.StatusResponse,
+    tags=["System"],
+    summary="Forward a frontend log line to the server log",
+    description=(
+        "Write a client-side log line into the backend's log file (backend/logs/app.log), prefixed with "
+        "'[CLIENT LOG]'. Used by the frontend to surface browser-side events/errors in server logs for debugging. "
+        "Body shape (not a strict schema, extra/missing keys are tolerated): "
+        "`{\"level\": \"INFO\"|\"WARN\"|\"ERROR\", \"message\": string, \"timestamp\": ISO-8601 string}`."
+    ),
+)
 async def client_log(log_data: dict):
     level = log_data.get("level", "INFO")
     message = log_data.get("message", "")
