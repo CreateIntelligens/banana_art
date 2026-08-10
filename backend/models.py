@@ -21,6 +21,7 @@ template_inputs = Table(
 
 class UploadedImage(Base):
     __tablename__ = "uploaded_images"
+    __table_args__ = {"sqlite_autoincrement": True}  # never reissue a deleted row's id
 
     id = Column(Integer, primary_key=True, index=True)
     filename = Column(String, index=True)
@@ -33,6 +34,7 @@ class UploadedImage(Base):
 
 class Template(Base):
     __tablename__ = "templates"
+    __table_args__ = {"sqlite_autoincrement": True}  # never reissue a deleted row's id
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, index=True)
@@ -45,6 +47,7 @@ class Template(Base):
 
 class Generation(Base):
     __tablename__ = "generations"
+    __table_args__ = {"sqlite_autoincrement": True}  # never reissue a deleted row's id
 
     id = Column(Integer, primary_key=True, index=True)
     prompt = Column(Text)
