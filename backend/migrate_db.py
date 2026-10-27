@@ -20,12 +20,10 @@ _AUTOINCREMENT_TABLES = [
             filename VARCHAR,
             filepath VARCHAR,
             upload_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-            is_hidden BOOLEAN DEFAULT 0,
-            gemini_file_uri TEXT,
-            gemini_file_expiration DATETIME
+            is_hidden BOOLEAN DEFAULT 0
         )
         """,
-        ["id", "filename", "filepath", "upload_time", "is_hidden", "gemini_file_uri", "gemini_file_expiration"],
+        ["id", "filename", "filepath", "upload_time", "is_hidden"],
         ["CREATE INDEX ix_uploaded_images_filename ON uploaded_images (filename)"],
     ),
     (

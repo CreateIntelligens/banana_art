@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 import google.generativeai as genai
 from dotenv import load_dotenv
 import anyio # Import anyio
+from PIL import Image
 
 from backend import models, database, schemas, migrate_db
 
@@ -24,6 +25,8 @@ API_KEY = os.getenv("GEMINI_API_KEY")
 MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-3-pro-preview")
 LOG_DIR = "backend/logs"
 UPLOAD_DIR = "backend/static/uploads"
+ALLOWED_IMAGE_FORMATS = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp"}
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
 GENERATED_DIR = "backend/static/generated"
 
 # Setup Logging
@@ -208,15 +211,33 @@ def generate_image_task(generation_id: int, prompt: str, image_paths: List[str],
             gen_record.completed_at = datetime.now()
             db.commit()
 
+def validate_image_upload(file: UploadFile) -> str:
+    """Ensure the upload is a real JPEG/PNG/WebP image; return the extension derived from its content."""
+    file.file.seek(0, os.SEEK_END)
+    size = file.file.tell()
+    file.file.seek(0)
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=400, detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)}MB)")
+    try:
+        # Restrict decoders so non-image payloads (EPS, SVG, etc.) are never parsed
+        with Image.open(file.file, formats=list(ALLOWED_IMAGE_FORMATS)) as img:
+            img_format = img.format
+            img.verify()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Only JPEG, PNG and WebP images are allowed")
+    finally:
+        file.file.seek(0)
+    return ALLOWED_IMAGE_FORMATS[img_format]
+
 def save_uploaded_file(file: UploadFile, db: Session, is_hidden: bool = False) -> models.UploadedImage:
     """Helper to save uploaded file to disk and DB."""
-    file_ext = os.path.splitext(file.filename)[1]
+    file_ext = validate_image_upload(file)
     new_filename = f"{uuid.uuid4()}{file_ext}"
     file_path = os.path.join(UPLOAD_DIR, new_filename)
-    
+
     with open(file_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
-        
+
     db_image = models.UploadedImage(
         filename=file.filename, 
         filepath=f"/static/uploads/{new_filename}",
@@ -244,6 +265,8 @@ async def upload_image(
         db_image = save_uploaded_file(file, db)
         logger.info(f"Image saved to DB ID: {db_image.id}")
         return db_image
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Upload failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -391,6 +414,8 @@ async def generate_content_direct(
             new_img = save_uploaded_file(file, db, is_hidden=True)
             uploaded_images.append(new_img)
             local_image_paths.append(os.path.join("backend", new_img.filepath.lstrip("/")))
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to process uploaded file in direct generate: {e}")
             raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
@@ -617,6 +642,8 @@ async def generate_from_template_direct(
             new_img = save_uploaded_file(file, db, is_hidden=True)
             all_source_images.append(new_img)
             local_image_paths.append(os.path.join("backend", new_img.filepath.lstrip("/")))
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Failed to process uploaded file in direct template gen: {e}")
             raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
